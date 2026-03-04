@@ -22,10 +22,13 @@ import type { ResolvedModel } from "../types.ts";
 import type {
 	AgentEvent,
 	AgentRuntime,
+	ConnectionState,
 	DirectSpawnOpts,
 	HooksDef,
 	OverlayContent,
 	ReadyState,
+	RpcProcessHandle,
+	RuntimeConnection,
 	SpawnOpts,
 	TranscriptSummary,
 } from "./types.ts";
@@ -156,6 +159,170 @@ function buildGuardsConfig(hooks: HooksDef): Record<string, unknown> {
 			onSessionEnd: ["ov", "log", "session-end", "--agent", agentName],
 		},
 	};
+}
+
+/** Pending JSON-RPC getState request waiting for a response. */
+interface PendingRequest {
+	resolve: (state: ConnectionState) => void;
+	reject: (err: Error) => void;
+	timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * RPC connection to a running Sapling agent process.
+ *
+ * Communicates over stdin/stdout using a simple NDJSON protocol:
+ * - Fire-and-forget control messages (steer, followUp, abort) written as plain NDJSON.
+ * - getState() uses JSON-RPC 2.0 (id + method) with a background reader routing responses.
+ *
+ * Background drainStdout() loop reads stdout and routes JSON-RPC 2.0 responses
+ * (lines with `jsonrpc` field and numeric `id`) to pending getState() waiters.
+ * All other NDJSON events are silently discarded.
+ *
+ * Not exported — constructed only by SaplingRuntime.connect().
+ */
+class SaplingConnection implements RuntimeConnection {
+	private nextId = 0;
+	private readonly pending = new Map<number, PendingRequest>();
+	private closed = false;
+	private readonly proc: RpcProcessHandle;
+	private readonly timeoutMs: number;
+
+	constructor(proc: RpcProcessHandle, timeoutMs = 5000) {
+		this.proc = proc;
+		this.timeoutMs = timeoutMs;
+		this.drainStdout();
+	}
+
+	/**
+	 * Background reader: consumes stdout, routes JSON-RPC responses to pending waiters.
+	 * Follows the same buffer/split pattern as parseEvents().
+	 * On stream end or error, rejects all pending requests.
+	 */
+	private drainStdout(): void {
+		const reader = this.proc.stdout.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+
+		const processLine = (line: string): void => {
+			const trimmed = line.trim();
+			if (!trimmed) return;
+
+			let parsed: Record<string, unknown>;
+			try {
+				parsed = JSON.parse(trimmed) as Record<string, unknown>;
+			} catch {
+				// Skip malformed lines — partial writes or non-JSON debug output
+				return;
+			}
+
+			// Route JSON-RPC 2.0 responses: must have jsonrpc field and numeric id
+			if (parsed.jsonrpc !== undefined && typeof parsed.id === "number") {
+				const pending = this.pending.get(parsed.id);
+				if (pending) {
+					clearTimeout(pending.timer);
+					this.pending.delete(parsed.id);
+					pending.resolve(parsed.result as ConnectionState);
+				}
+			}
+			// Non-RPC NDJSON lines are silently discarded
+		};
+
+		const read = async (): Promise<void> => {
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop() ?? "";
+
+					for (const line of lines) {
+						processLine(line);
+					}
+				}
+
+				// Flush remaining buffer on clean stream end
+				if (buffer.trim()) {
+					processLine(buffer);
+				}
+			} catch {
+				// Stream error — fall through to reject all pending
+			} finally {
+				reader.releaseLock();
+				// Reject all pending on stream end or error
+				for (const [, pending] of this.pending) {
+					clearTimeout(pending.timer);
+					pending.reject(new Error("connection closed"));
+				}
+				this.pending.clear();
+			}
+		};
+
+		// Fire-and-forget background reader
+		read().catch(() => {
+			// Errors are handled in the finally block above
+		});
+	}
+
+	/** Write a JSON message + newline to stdin. */
+	private writeMsg(msg: Record<string, unknown>): void {
+		const line = `${JSON.stringify(msg)}\n`;
+		const result = this.proc.stdin.write(line);
+		if (result instanceof Promise) {
+			result.catch(() => {
+				// Fire-and-forget write errors are non-fatal for control messages
+			});
+		}
+	}
+
+	async sendPrompt(text: string): Promise<void> {
+		this.writeMsg({ method: "steer", params: { content: text } });
+	}
+
+	async followUp(text: string): Promise<void> {
+		this.writeMsg({ method: "followUp", params: { content: text } });
+	}
+
+	async abort(): Promise<void> {
+		this.writeMsg({ method: "abort" });
+	}
+
+	getState(): Promise<ConnectionState> {
+		if (this.closed) {
+			return Promise.reject(new Error("connection closed"));
+		}
+		const id = this.nextId++;
+		return new Promise<ConnectionState>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this.pending.delete(id);
+				reject(new Error("getState timed out"));
+			}, this.timeoutMs);
+
+			this.pending.set(id, { resolve, reject, timer });
+
+			// Send the request — on write failure, clean up the pending entry
+			const line = `${JSON.stringify({ id, method: "getState" })}\n`;
+			const result = this.proc.stdin.write(line);
+			if (result instanceof Promise) {
+				result.catch(() => {
+					clearTimeout(timer);
+					this.pending.delete(id);
+					reject(new Error("write failed"));
+				});
+			}
+		});
+	}
+
+	close(): void {
+		this.closed = true;
+		for (const [, pending] of this.pending) {
+			clearTimeout(pending.timer);
+			pending.reject(new Error("connection closed"));
+		}
+		this.pending.clear();
+	}
 }
 
 /**
@@ -480,6 +647,19 @@ export class SaplingRuntime implements AgentRuntime {
 	 * @param model - Resolved model with optional provider env vars
 	 * @returns Environment variable map for sapling subprocess
 	 */
+	/**
+	 * Establish a direct RPC connection to a running Sapling agent process.
+	 *
+	 * Returns a SaplingConnection that multiplexes getState() JSON-RPC 2.0
+	 * requests over stdin/stdout alongside the normal NDJSON event stream.
+	 *
+	 * @param process - Stdin/stdout handles from the spawned agent subprocess
+	 * @returns RuntimeConnection for RPC-based health checks and control
+	 */
+	connect(process: RpcProcessHandle): RuntimeConnection {
+		return new SaplingConnection(process);
+	}
+
 	buildEnv(model: ResolvedModel): Record<string, string> {
 		const env: Record<string, string> = {
 			// Clear Claude Code session markers so sapling doesn't auto-detect

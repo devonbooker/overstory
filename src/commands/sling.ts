@@ -32,6 +32,7 @@ import { printSuccess } from "../logging/color.ts";
 import { createMailClient } from "../mail/client.ts";
 import { createMailStore } from "../mail/store.ts";
 import { createMulchClient } from "../mulch/client.ts";
+import { setConnection } from "../runtimes/connections.ts";
 import { getRuntime } from "../runtimes/registry.ts";
 import { openSessionStore } from "../sessions/compat.ts";
 import { createRunStore } from "../sessions/store.ts";
@@ -856,6 +857,11 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			// Redirecting stdout/stderr to files prevents OS pipe buffer backpressure:
 			// when nobody reads the pipe, the child blocks on write() after ~64 KB and
 			// becomes a zombie. File writes have no such limit.
+			//
+			// Exception: RPC-capable runtimes need a live stdout pipe to receive
+			// JSON-RPC 2.0 responses (getState). In that case stdoutFile is omitted
+			// and the caller consumes the stream via the RuntimeConnection.
+			const hasRpcConnect = typeof runtime.connect === "function";
 			const logTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
 			const agentLogDir = join(overstoryDir, "logs", name, logTimestamp);
 			mkdirSync(agentLogDir, { recursive: true });
@@ -863,9 +869,20 @@ export async function slingCommand(taskId: string, opts: SlingOptions): Promise<
 			const headlessProc = await spawnHeadlessAgent(argv, {
 				cwd: worktreePath,
 				env: { ...(process.env as Record<string, string>), ...directEnv },
-				stdoutFile: join(agentLogDir, "stdout.log"),
+				stdoutFile: hasRpcConnect ? undefined : join(agentLogDir, "stdout.log"),
 				stderrFile: join(agentLogDir, "stderr.log"),
 			});
+
+			// Wire up RPC connection for runtimes that support it (e.g., Sapling).
+			// The connection is stored in the module-level registry so the watchdog
+			// and other subsystems can call getState() for health checks.
+			if (hasRpcConnect && headlessProc.stdout && runtime.connect) {
+				const connection = runtime.connect({
+					stdin: headlessProc.stdin,
+					stdout: headlessProc.stdout,
+				});
+				setConnection(name, connection);
+			}
 
 			// 13. Record session with empty tmuxSession (no tmux pane for headless agents).
 			const session: AgentSession = {
