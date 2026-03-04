@@ -5,6 +5,14 @@ import type { OverstoryConfig, QualityGate, TaskTrackerBackend } from "./types.t
 // Module-level project root override (set by --project global flag)
 let _projectRootOverride: string | undefined;
 
+// Tracks warnings already emitted this process to avoid repeating on every loadConfig call.
+const _warnedOnce = new Set<string>();
+
+/** Clear the dedup warning set. Intended for tests only. */
+export function clearWarningsSeen(): void {
+	_warnedOnce.clear();
+}
+
 /** Override project root for all config resolution (used by --project global flag). */
 export function setProjectRootOverride(path: string): void {
 	_projectRootOverride = path;
@@ -716,9 +724,13 @@ function validateConfig(config: OverstoryConfig): void {
 				);
 			}
 			if (toolHeavyRoles.includes(role)) {
-				process.stderr.write(
-					`[overstory] WARNING: models.${role} uses non-Anthropic model '${model}'. Tool-use compatibility cannot be verified at config time.\n`,
-				);
+				const warnKey = `non-anthropic:${role}:${model}`;
+				if (!_warnedOnce.has(warnKey)) {
+					_warnedOnce.add(warnKey);
+					process.stderr.write(
+						`[overstory] WARNING: models.${role} uses non-Anthropic model '${model}'. Tool-use compatibility cannot be verified at config time.\n`,
+					);
+				}
 			}
 		} else {
 			// Must be a valid alias
