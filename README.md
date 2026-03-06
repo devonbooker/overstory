@@ -99,6 +99,7 @@ Every command supports `--json` where noted. Global flags: `-q`/`--quiet`, `--ti
 | `ov coordinator send` | Fire-and-forget message to coordinator (`--subject`) |
 | `ov coordinator ask` | Synchronous request/response to coordinator (`--subject`, `--timeout`) |
 | `ov coordinator output` | Show recent coordinator output (`--lines`) |
+| `ov coordinator check-complete` | Evaluate exit triggers, return completion status |
 | `ov supervisor start` | **[DEPRECATED]** Start per-project supervisor agent |
 | `ov supervisor stop` | **[DEPRECATED]** Stop supervisor |
 | `ov supervisor status` | **[DEPRECATED]** Show supervisor state |
@@ -232,7 +233,7 @@ overstory/
     config.ts                     Config loader + validation
     errors.ts                     Custom error types
     json.ts                       Standardized JSON envelope helpers
-    commands/                     One file per CLI subcommand (34 commands)
+    commands/                     One file per CLI subcommand (35 commands)
       agents.ts                   Agent discovery and querying
       coordinator.ts              Persistent orchestrator lifecycle
       supervisor.ts               Team lead management [DEPRECATED]

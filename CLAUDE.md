@@ -51,7 +51,7 @@ Purpose-built messaging via `bun:sqlite` in `.overstory/mail.db`. WAL mode for c
 ```
 overstory/                        # This repo (the overstory tool itself)
   src/
-    index.ts                      # CLI entry point (Commander.js program, 34 commands)
+    index.ts                      # CLI entry point (Commander.js program, 35 commands)
     types.ts                      # ALL shared types and interfaces
     config.ts                     # Config loader + defaults + validation
     errors.ts                     # Custom error types (extend OverstoryError)
@@ -64,7 +64,7 @@ overstory/                        # This repo (the overstory tool itself)
       status.ts                   # ov status
       dashboard.ts                # ov dashboard (live TUI)
       inspect.ts                  # ov inspect (deep agent view)
-      coordinator.ts              # ov coordinator start/stop/status/send/ask/output
+      coordinator.ts              # ov coordinator start/stop/status/send/ask/output/check-complete
       supervisor.ts               # ov supervisor start/stop/status [DEPRECATED]
       hooks.ts                    # ov hooks install/uninstall/status
       mail.ts                     # ov mail send/check/list/read/reply/purge
@@ -335,6 +335,7 @@ ov coordinator <sub>            Persistent coordinator agent
     --timeout <seconds>                  Reply timeout (default: 120)
   output                                 Show recent coordinator output (tmux pane content)
     --lines <n>                          Number of lines to capture (default: 100)
+  check-complete                         Evaluate exit triggers, return completion status
   --json                                 JSON output
 
 ov supervisor <sub>             [DEPRECATED] Per-project supervisor agent
@@ -519,6 +520,7 @@ ov upgrade                       Upgrade overstory to latest npm version
   --json                                 JSON output
 
 ov clean                         Wipe runtime state (nuclear cleanup)
+  --agent <name>                         Targeted cleanup of a single agent
   --all                                  Wipe everything
   --mail  --sessions  --metrics          Individual DB cleanup
   --logs  --worktrees  --branches        Individual resource cleanup

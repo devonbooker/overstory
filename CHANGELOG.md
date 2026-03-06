@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-03-06
+
+### Added
+
+#### Coordinator Completion Protocol
+- **`ov coordinator check-complete`** — new subcommand that evaluates configured exit triggers (`allAgentsDone`, `taskTrackerEmpty`, `onShutdownSignal`) and returns per-trigger status; complete = true only when ALL enabled triggers are met
+- **`coordinator.exitTriggers` config** — new `coordinator` section in `config.yaml` with three boolean triggers controlling automatic coordinator shutdown (all default to `false`)
+- Exit-trigger evaluation integrated into coordinator completion protocol — the coordinator can now self-terminate when configured conditions are met
+- `allAgentsDone` trigger also checks the merge queue to prevent premature shutdown while branches are still pending merge
+
+#### Spawn Rollback
+- **`rollbackWorktree()`** — new helper in `src/worktree/manager.ts` that removes a worktree and deletes its branch (best-effort, errors swallowed)
+- **`ov sling` rollback on spawn failure** — if agent spawn fails after worktree creation, the worktree and branch are automatically rolled back to avoid orphaned resources
+
+#### Per-Agent Cleanup
+- **`ov clean --agent <name>`** — targeted cleanup of a single agent: kills tmux session or process tree, removes worktree, deletes branch, clears agent and log directories, logs synthetic session-end event, and marks session as completed
+- **`ov stop --clean-worktree` on completed agents** — previously threw an error for completed agents; now skips the kill step and proceeds directly to worktree+branch cleanup
+
+#### Merge Reliability
+- **Auto-commit os-eco state files before merge** — runtime state files (`.seeds/`, `.overstory/`, `.mulch/`, `.canopy/`, `.greenhouse/`, `.claude/`, `CLAUDE.md`) are automatically committed with `chore: sync os-eco runtime state` to prevent dirty-tree merge errors
+- **Stash/pop dirty files during merge** — uncommitted changes are stashed before merge and popped afterward, with proper cleanup on failure
+- **`onMergeSuccess` callback** — `createMergeResolver()` now accepts an optional `onMergeSuccess` hook called after successful merge of each entry
+- **Untracked file handling** in merge resolver improved to prevent conflicts between tracked and untracked files
+
+#### Init Scaffold Commit
+- **Auto-commit scaffold files at end of `ov init`** — ecosystem directories (`.overstory/`, `.seeds/`, `.mulch/`, `.canopy/`, `.gitattributes`, `CLAUDE.md`) are committed so agent branches don't cause untracked-vs-tracked conflicts during merge
+
+### Fixed
+
+- **Headless agent kill blast radius** — `killSession("")` with tmux prefix matching could kill ALL tmux sessions; watchdog now uses `killAgent()` helper that routes headless agents through PID-based `killProcessTree()` and TUI agents through named tmux sessions
+- **Stale headless agent detection** — watchdog now checks `isProcessAlive(pid)` for headless agents instead of only checking tmux session liveness
+- **Coordinator state file commit** — completion protocols now commit os-eco state files before final steps to prevent dirty-tree errors downstream
+- **Coordinator premature issue closure** — coordinator no longer closes seeds issues before the lead agent merges its branch; `allAgentsDone` trigger checks merge queue for pending branches
+- **Coordinator auto-complete on session-end** — `ov run complete` is no longer called automatically from the per-turn Stop hook, preventing premature run completion
+- **Self-exiting coordinator** — session-end hook now handles coordinators that exit themselves (e.g., via exit triggers) without throwing errors
+- **`--json` flag stolen by parent Commander** — `.enablePositionalOptions()` added to the root program so subcommand `--json` flags are not consumed by the parent parser
+
+### Changed
+
+- CLI command count: 34 → 35 (new `check-complete` subcommand under `ov coordinator`)
+
+### Testing
+
+- 3248 tests across 98 files (7677 `expect()` calls)
+
 ## [0.8.5] - 2026-03-05
 
 ### Added
@@ -1464,7 +1509,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome configuration for formatting and linting
 - TypeScript strict mode with `noUncheckedIndexedAccess`
 
-[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/jayminwest/overstory/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/jayminwest/overstory/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/jayminwest/overstory/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/jayminwest/overstory/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/jayminwest/overstory/compare/v0.8.2...v0.8.3
