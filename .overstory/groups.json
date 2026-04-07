@@ -956,8 +956,19 @@
 			"overstory-a655",
 			"overstory-ee23"
 		],
-		"status": "active",
+		"status": "completed",
 		"createdAt": "2026-03-23T19:57:17.357Z",
+		"completedAt": "2026-03-23T20:09:46.648Z"
+	},
+	{
+		"id": "group-c06c267a",
+		"name": "submodule-cascade-fix",
+		"memberIssueIds": [
+			"overstory-5804",
+			"overstory-329a"
+		],
+		"status": "active",
+		"createdAt": "2026-04-07T21:11:43.098Z",
 		"completedAt": null
 	}
 ]
